@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-automation-web
+  namespace: portfolio
+  labels:
+    app.kubernetes.io/name: ai-automation-web
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: ai-automation-web
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

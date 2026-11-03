@@ -1,0 +1,7 @@
+.git
+.gitignore
+terraform/
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+terraform.tfstate*

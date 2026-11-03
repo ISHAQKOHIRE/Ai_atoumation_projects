@@ -1,0 +1,4 @@
+aws_region   = "ap-south-1"
+project_name = "ai-automation"
+key_name     = "terraform.keys"
+admin_cidrs  = ["198.51.100.25/32"]
