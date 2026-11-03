@@ -42,3 +42,8 @@ output "route53_zone_id" {
   description = "Public Route 53 hosted zone ID for the portfolio domain."
   value       = data.aws_route53_zone.portfolio.zone_id
 }
+
+output "acm_certificate_arn" {
+  description = "Validated ACM certificate ARN for the root and www domains."
+  value       = aws_acm_certificate_validation.portfolio.certificate_arn
+}

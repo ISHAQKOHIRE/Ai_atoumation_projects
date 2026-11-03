@@ -8,6 +8,7 @@ A portfolio-ready starter project that builds a small web application into a Doc
 - An EC2 Jenkins server with an Elastic IP, reachable only from the CIDRs you allow
 - An Amazon EKS cluster with a small managed node group
 - A single NAT Gateway for private-node outbound access
+- An ACM DNS-validated certificate for the root domain and `www` subdomain, used for HTTPS at the Kubernetes load balancer
 - An Amazon ECR repository for application images
 - A private, encrypted, versioned S3 bucket for build metadata
 - A Flask portfolio page, Docker image, Kubernetes manifests, and Jenkins pipeline
@@ -42,7 +43,7 @@ Edit `terraform.tfvars`: set `key_name` to your existing AWS EC2 key pair name a
 
 The current project defaults are configured for the Mumbai region (`ap-south-1`) and the existing EC2 key pair name `terraform.keys`. Confirm that this key pair exists in your AWS account in Mumbai. Keep `terraform.tfvars` local; it is excluded from Git so your trusted IP range is not published.
 
-Terraform uses the existing public Route 53 hosted zone for `ishaqkohire.site`; it does not create another hosted zone. You have already delegated the domain by changing its registrar nameservers. After a successful deployment, Jenkins UPSERTs apex and `www` A-alias records to the EKS load balancer, replacing any existing records at those names. The site currently uses HTTP only, not HTTPS.
+Terraform uses the existing public Route 53 hosted zone for `ishaqkohire.site`; it does not create another hosted zone. The zone must be authoritative for the domain and available to Terraform so it can create ACM DNS validation records. After a successful deployment, Jenkins UPSERTs apex and `www` A-alias records to the EKS load balancer, replacing any existing records at those names. ACM terminates HTTPS at the load balancer; the load balancer forwards HTTP to the application. HTTP remains available and is not automatically redirected to HTTPS.
 
 The AWS account ID is detected from the credentials used by Terraform and does not need to be added to the configuration. Verify that your AWS CLI is using the intended account before provisioning:
 
@@ -58,7 +59,7 @@ terraform plan
 terraform apply
 ```
 
-Terraform outputs the Jenkins URL and initial SSH connection details, cluster name, ECR repository, and S3 bucket. Keep the Terraform state private: it contains infrastructure details and may contain sensitive values.
+Terraform outputs the Jenkins URL and initial SSH connection details, cluster name, ECR repository, S3 bucket, and validated ACM certificate ARN. Keep the Terraform state private: it contains infrastructure details and may contain sensitive values.
 
 ## 2. Finish Jenkins setup
 
@@ -73,7 +74,7 @@ Terraform outputs the Jenkins URL and initial SSH connection details, cluster na
 4. Complete Jenkins' setup wizard and install the suggested plugins, including **Pipeline**.
 5. Create a Pipeline job pointing at this repository and set its script path to `Jenkinsfile`.
 6. Add the Jenkins EC2 instance profile's IAM role as the job's AWS identity; **do not** add long-lived AWS access keys. The instance profile, ECR, and EKS access are created by Terraform.
-7. When running the job, provide the `AWS_REGION`, `EKS_CLUSTER_NAME`, `ECR_REPOSITORY`, `S3_BUCKET`, `DOMAIN_NAME`, and `ROUTE53_ZONE_ID` parameters from Terraform outputs.
+7. When running the job, provide the `AWS_REGION`, `EKS_CLUSTER_NAME`, `ECR_REPOSITORY`, `S3_BUCKET`, `DOMAIN_NAME`, `ROUTE53_ZONE_ID`, and `ACM_CERTIFICATE_ARN` parameters from Terraform outputs.
 
 The EC2 user-data script installs Jenkins, Java, Docker, AWS CLI v2, and a `kubectl` version matching the configured EKS Kubernetes minor version. Allow a few minutes after `terraform apply` for first-boot installation to finish. Jenkins is reachable at `http://<jenkins_public_ip>:8080` only from a CIDR in `admin_cidrs`. If that URL does not open, check that your current public IP is included in `terraform/terraform.tfvars`, then run `terraform plan` and `terraform apply` to update the Jenkins security group.
 
@@ -81,7 +82,7 @@ The EC2 user-data script installs Jenkins, Java, Docker, AWS CLI v2, and a `kube
 
 Run the Jenkins job. It builds and tags the image with the Jenkins build number, pushes it to ECR, applies the Kubernetes manifests, waits for rollout, and uploads build metadata to S3.
 
-The Jenkins pipeline waits for the Kubernetes load balancer, then updates Route 53 A-alias records for the root domain and `www` to point to it. This project configures HTTP only; HTTPS and an ACM certificate are not configured. DNS changes can take time to propagate. Open `http://ishaqkohire.site` after the pipeline succeeds. To inspect the service and its hostname:
+The Jenkins pipeline waits for the Kubernetes load balancer, then updates Route 53 A-alias records for the root domain and `www` to point to it. Open `https://ishaqkohire.site` or `https://www.ishaqkohire.site` after the pipeline succeeds. HTTP is also available without a redirect. DNS changes can take time to propagate. To inspect the service and its hostname:
 
 ```bash
 aws eks update-kubeconfig --region <aws-region> --name <eks-cluster-name>

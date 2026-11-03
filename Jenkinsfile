@@ -13,6 +13,7 @@ pipeline {
         string(name: 'S3_BUCKET', defaultValue: '', description: 'Terraform artifact_bucket_name output')
         string(name: 'DOMAIN_NAME', defaultValue: 'ishaqkohire.site', description: 'Terraform domain_name output')
         string(name: 'ROUTE53_ZONE_ID', defaultValue: '', description: 'Terraform route53_zone_id output')
+        string(name: 'ACM_CERTIFICATE_ARN', defaultValue: '', description: 'Terraform acm_certificate_arn output')
     }
 
     environment {
@@ -29,8 +30,9 @@ pipeline {
                         !params.ECR_REPOSITORY?.trim() ||
                         !params.S3_BUCKET?.trim() ||
                         !params.DOMAIN_NAME?.trim() ||
-                        !params.ROUTE53_ZONE_ID?.trim()) {
-                        error('Set AWS_REGION, EKS_CLUSTER_NAME, ECR_REPOSITORY, S3_BUCKET, DOMAIN_NAME, and ROUTE53_ZONE_ID from Terraform outputs.')
+                        !params.ROUTE53_ZONE_ID?.trim() ||
+                        !params.ACM_CERTIFICATE_ARN?.trim()) {
+                        error('Set AWS_REGION, EKS_CLUSTER_NAME, ECR_REPOSITORY, S3_BUCKET, DOMAIN_NAME, ROUTE53_ZONE_ID, and ACM_CERTIFICATE_ARN from Terraform outputs.')
                     }
                 }
             }
@@ -62,7 +64,8 @@ pipeline {
                     kubectl apply -f k8s/namespace.yaml
                     sed "s|IMAGE_PLACEHOLDER|${IMAGE_URI}|g" k8s/deployment.yaml |
                       kubectl apply -f -
-                    kubectl apply -f k8s/service.yaml
+                    sed "s|ACM_CERTIFICATE_ARN_PLACEHOLDER|${ACM_CERTIFICATE_ARN}|g" k8s/service.yaml |
+                      kubectl apply -f -
                     kubectl rollout status "deployment/${K8S_DEPLOYMENT}" \
                       --namespace "$K8S_NAMESPACE" --timeout=5m
                 '''
