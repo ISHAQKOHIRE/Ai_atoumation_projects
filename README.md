@@ -1,139 +1,187 @@
-# AI Automation Projects - AWS DevOps Portfolio
+# AI Automation Portfolio on AWS
 
-A portfolio-ready starter project that builds a small web application into a Docker image and deploys it to Amazon EKS with Jenkins.
+A Flask portfolio site built as a Docker image, stored in Amazon ECR, and deployed to Amazon EKS by a Jenkins pipeline. Terraform provisions the AWS infrastructure and Jenkins EC2 controller.
 
-## What this project provisions
+This project currently serves the site over **HTTP using the Kubernetes LoadBalancer hostname**. ACM certificates, HTTPS, and custom-domain DNS updates are intentionally not part of this deployment.
 
-- A dedicated VPC with public and private subnets across availability zones
-- An EC2 Jenkins server with an Elastic IP, reachable only from the CIDRs you allow
-- An Amazon EKS cluster with a small managed node group
-- A single NAT Gateway for private-node outbound access
-- An ACM DNS-validated certificate for the root domain and `www` subdomain, used for HTTPS at the Kubernetes load balancer
-- An Amazon ECR repository for application images
-- A private, encrypted, versioned S3 bucket for build metadata
-- A Flask portfolio page, Docker image, Kubernetes manifests, and Jenkins pipeline
+## Architecture
 
-After a successful Jenkins deployment, the pipeline updates the Route 53 apex (`ishaqkohire.site`) and `www` records to point to the Kubernetes load balancer.
+- Terraform provisions a VPC, public/private subnets, internet and NAT gateways, security groups, and an EKS cluster with a managed node group.
+- Terraform provisions a Jenkins EC2 instance with an Elastic IP, IAM instance profile, and access to the EKS API.
+- Jenkins checks out this repository, builds the Docker image, pushes a unique immutable tag to ECR, deploys it to EKS, and archives build metadata in a private S3 bucket.
+- Kubernetes exposes the web app with a `LoadBalancer` service on port 80. The application health endpoint is `/health`.
 
-## Important: cost and security
+## Costs and security
 
-**This is not a free-tier architecture.** EKS cluster-hours, EC2, EBS, NAT Gateway hours and data processing, public IPv4 addresses, load balancers, data transfer, and S3 can incur ongoing charges. A running EKS cluster alone has a substantial hourly charge. Review current AWS pricing, set an AWS Budget, and run `terraform destroy` when you no longer want the environment. Nothing is deployed until you run Terraform.
+**This is not a free-tier deployment.** EKS, EC2, EBS, NAT Gateway, public IPv4 addresses, load balancers, storage, and data transfer can incur ongoing charges. Check current AWS pricing and set a budget before provisioning. Delete the Kubernetes LoadBalancer service and run Terraform destroy when you are finished.
 
-The worker nodes run in private subnets and use one NAT Gateway for outbound access. A single NAT keeps this learning setup simpler and cheaper than one per availability zone, but it is a single point of failure; production systems should use resilient networking, VPC endpoints where appropriate, HTTPS with a domain, least-privilege Kubernetes access, and a hardened Jenkins design.
+Jenkins is served over HTTP on port 8080 and is reachable only from the CIDRs in `admin_cidrs`. Use your trusted public IP as a `/32`; do not use `0.0.0.0/0`. The EKS public API is also restricted to those CIDRs. The Jenkins instance uses its IAM role instead of stored AWS access keys. That role has cluster-admin access in this learning setup; do not copy this design into production without replacing it with narrowly scoped permissions and hardening Jenkins.
 
-SSH, Jenkins, and the EKS public API are limited to `admin_cidrs`. Supply your trusted public IP range as a `/32` (or your office/VPN CIDR); do not use `0.0.0.0/0`. Jenkins reaches the private EKS API through a dedicated security group attached to the control plane. Jenkins has cluster-admin access in this learning template so the pipeline can deploy Kubernetes resources. Restrict that access before using this design for production.
+Never commit `terraform.tfvars`, Terraform state, AWS credentials, private SSH keys, Jenkins secrets, or generated logs. The Terraform directory's `.gitignore` excludes local state and variable files.
 
 ## Prerequisites
 
-- An AWS account and credentials with permission to create the resources in `terraform/`
-- Terraform 1.5 or later
-- An SSH key pair already created in the chosen AWS region
-- A trusted public IPv4 CIDR for administration
-- The domain `ishaqkohire.site` and access to change its nameservers at the registrar
-- Git and Docker are useful for local development; Jenkins builds the image in AWS
+- An AWS account and an identity authorized to create the resources defined in `terraform/`
+- AWS CLI v2, Terraform 1.5+, and Git
+- An EC2 key pair already created in the target AWS region
+- A trusted public IPv4 address/CIDR for administrative access
+- A GitHub repository accessible by the Jenkins controller
+- Docker Desktop is only needed if you want to build/test the image locally; Jenkins builds it on the EC2 instance
 
 ## 1. Configure and provision AWS
 
+From the repository root, create the local Terraform variables file:
+
 ```powershell
-cd terraform
-Copy-Item terraform.tfvars.example terraform.tfvars
+Set-Location .\terraform
+Copy-Item .\terraform.tfvars.example .\terraform.tfvars
 ```
 
-Edit `terraform.tfvars`: set `key_name` to your existing AWS EC2 key pair name and replace the example `admin_cidrs` entry with your public IP in CIDR notation, for example `198.51.100.25/32`. The example address is reserved for documentation and will not grant access.
+Edit `terraform.tfvars`:
 
-The current project defaults are configured for the Mumbai region (`ap-south-1`) and the existing EC2 key pair name `terraform.keys`. Confirm that this key pair exists in your AWS account in Mumbai. Keep `terraform.tfvars` local; it is excluded from Git so your trusted IP range is not published.
+- Set `key_name` to your existing EC2 key pair name.
+- Replace `admin_cidrs` with your current trusted IP, such as `["203.0.113.10/32"]`. The example address is reserved for documentation and will not work.
+- Keep this file local; it is ignored by Git.
 
-Terraform uses the existing public Route 53 hosted zone for `ishaqkohire.site`; it does not create another hosted zone. The zone must be authoritative for the domain and available to Terraform so it can create ACM DNS validation records. After a successful deployment, Jenkins UPSERTs apex and `www` A-alias records to the EKS load balancer, replacing any existing records at those names. ACM terminates HTTPS at the load balancer; the load balancer forwards HTTP to the application. HTTP remains available and is not automatically redirected to HTTPS.
-
-The AWS account ID is detected from the credentials used by Terraform and does not need to be added to the configuration. Verify that your AWS CLI is using the intended account before provisioning:
+Select the AWS profile you intend to use and confirm the account:
 
 ```powershell
+$env:AWS_PROFILE = "terraform"
 aws sts get-caller-identity
 ```
+
+Initialize and review the infrastructure:
 
 ```powershell
 terraform init
 terraform fmt -recursive
 terraform validate
 terraform plan
+```
+
+Review the full plan, especially resource deletions or replacements, before applying:
+
+```powershell
 terraform apply
 ```
 
-Terraform outputs the Jenkins URL and initial SSH connection details, cluster name, ECR repository, S3 bucket, and validated ACM certificate ARN. Keep the Terraform state private: it contains infrastructure details and may contain sensitive values.
+This HTTP-only version no longer manages ACM certificates or Route 53 records. If upgrading a workspace that previously managed those resources, Terraform may propose deleting them; inspect the plan carefully and proceed only if that is intended.
 
-## 2. Finish Jenkins setup
+## 2. Open and initialize Jenkins
 
-1. Open the `jenkins_url` Terraform output from a network included in `admin_cidrs`.
-2. SSH to `ubuntu@<jenkins_public_ip>` using the matching private key.
-3. Read the initial Jenkins password with:
+Get the Jenkins URL and instance IP from Terraform:
 
-   ```bash
-   sudo cat /var/lib/jenkins/secrets/initialAdminPassword
-   ```
+```powershell
+terraform output -raw jenkins_url
+terraform output -raw jenkins_public_ip
+```
 
-4. Complete Jenkins' setup wizard and install the suggested plugins, including **Pipeline**.
-5. Create a Pipeline job pointing at this repository and set its script path to `Jenkinsfile`.
-6. Add the Jenkins EC2 instance profile's IAM role as the job's AWS identity; **do not** add long-lived AWS access keys. The instance profile, ECR, and EKS access are created by Terraform.
-7. When running the job, provide the `AWS_REGION`, `EKS_CLUSTER_NAME`, `ECR_REPOSITORY`, `S3_BUCKET`, `DOMAIN_NAME`, `ROUTE53_ZONE_ID`, and `ACM_CERTIFICATE_ARN` parameters from Terraform outputs.
+Open the Jenkins URL from a network whose public IP is included in `admin_cidrs`. Allow a few minutes after the first apply for the Jenkins instance bootstrap to finish.
 
-The EC2 user-data script installs Jenkins, Java, Docker, AWS CLI v2, and a `kubectl` version matching the configured EKS Kubernetes minor version. Allow a few minutes after `terraform apply` for first-boot installation to finish. Jenkins is reachable at `http://<jenkins_public_ip>:8080` only from a CIDR in `admin_cidrs`. If that URL does not open, check that your current public IP is included in `terraform/terraform.tfvars`, then run `terraform plan` and `terraform apply` to update the Jenkins security group.
+If Jenkins requests its initial unlock password, connect to the instance using the matching private key:
 
-## 3. Deploy the application
+```powershell
+ssh -i C:\path\to\your-private-key ubuntu@<jenkins-public-ip>
+```
 
-Run the Jenkins job. It builds and tags the image with the Jenkins build number, pushes it to ECR, applies the Kubernetes manifests, waits for rollout, and uploads build metadata to S3.
-
-The Jenkins pipeline waits for the Kubernetes load balancer, then updates Route 53 A-alias records for the root domain and `www` to point to it. Open `https://ishaqkohire.site` or `https://www.ishaqkohire.site` after the pipeline succeeds. HTTP is also available without a redirect. DNS changes can take time to propagate. To inspect the service and its hostname:
+Then retrieve the password on the instance:
 
 ```bash
-aws eks update-kubeconfig --region <aws-region> --name <eks-cluster-name>
+sudo cat /var/lib/jenkins/secrets/initialAdminPassword
+```
+
+Complete Jenkins' setup wizard and install the suggested plugins, including Pipeline and Git. Do not put AWS access keys in Jenkins; the EC2 instance profile provides AWS credentials.
+
+## 3. Create a Jenkins pipeline job
+
+1. In Jenkins, select **New Item**, enter a job name, choose **Pipeline**, and create the job.
+2. In the job configuration, set **Definition** to **Pipeline script from SCM** and choose **Git**.
+3. Enter this repository URL: `https://github.com/ISHAQKOHIRE/Ai_atoumation_projects.git`.
+4. Set the branch to `*/master` and the script path to `Jenkinsfile`. If the repository is private, configure a GitHub access credential in Jenkins; never put a token in the `Jenkinsfile`.
+5. Save the job. The Jenkinsfile defines the build parameters. If needed, run the job once to load the Jenkinsfile and then choose **Build with Parameters**.
+
+Get the parameter values in another PowerShell window from the Terraform directory:
+
+```powershell
+terraform output -raw aws_region
+terraform output -raw eks_cluster_name
+terraform output -raw ecr_repository_name
+terraform output -raw artifact_bucket_name
+```
+
+Provide those values as `AWS_REGION`, `EKS_CLUSTER_NAME`, `ECR_REPOSITORY`, and `S3_BUCKET` when starting the build.
+
+## 4. Deploy and verify the site
+
+The pipeline builds and pushes a uniquely tagged image, applies the namespace, deployment, and HTTP LoadBalancer service, waits for the rollout and `/health` endpoint, then stores build metadata in S3 and Jenkins artifacts.
+
+The pipeline log and archived `deployment-url.txt` show the HTTP URL. You can also inspect the deployment from your computer:
+
+```powershell
+aws eks update-kubeconfig --region ap-south-1 --name ai-automation-eks
+kubectl get nodes
+kubectl get pods --namespace portfolio
 kubectl get service ai-automation-web --namespace portfolio
 ```
 
-Provisioning the load balancer can take several minutes. The domain points to the app only after the Jenkins pipeline succeeds; the Jenkins EC2 IP is not the website address. The endpoint remains available only while the AWS resources are running and billable.
+Wait for the service's `EXTERNAL-IP` to show an AWS load-balancer hostname, then visit `http://<load-balancer-hostname>`. To test the health endpoint:
+
+```powershell
+Invoke-WebRequest "http://<load-balancer-hostname>/health" -UseBasicParsing
+```
+
+The load balancer hostname is the active website address. `ishaqkohire.site` is not configured by this Terraform setup; custom-domain routing and HTTPS require additional DNS and certificate configuration.
 
 ## Troubleshooting
 
-- **`kubectl` TLS handshake timeout:** The EKS public API and Jenkins security group are restricted to `admin_cidrs`. Set it to the public IP of the network you are currently using as a `/32`, then review and apply the Terraform plan. Do not open access to `0.0.0.0/0`.
-- **Jenkins page times out:** Check the EC2 console output or SSH to the instance and inspect `sudo tail -n 100 /var/log/cloud-init-output.log`. The bootstrap installs the current Jenkins repository signing key and Java 21. Updating EC2 user data does not automatically rerun cloud-init on an already-created instance; repair that host over SSH or deliberately replace it after reviewing the Terraform plan.
+- **Jenkins URL times out:** Confirm Jenkins finished installing and the current public IP is listed in `admin_cidrs`. After changing `terraform.tfvars`, review and apply the Terraform plan.
+- **Jenkins cannot connect to EKS:** Check that the EKS public API CIDR includes the current trusted IP, that Jenkins can reach the cluster, and that the Jenkins IAM role's EKS access entry exists.
+- **ECR `AccessDenied`:** Verify Jenkins uses its EC2 instance profile and that the Terraform-managed ECR push policy is attached.
+- **Pod is `ImagePullBackOff`:** Inspect `kubectl describe pod` and verify the image tag exists in ECR. The EKS node role needs ECR pull access.
+- **LoadBalancer has no hostname:** Check `kubectl describe service ai-automation-web -n portfolio` and recent Kubernetes events. Provisioning can take several minutes.
+- **Deployment health check fails:** Inspect `kubectl logs deployment/ai-automation-web -n portfolio` and verify the `/health` readiness probe.
 
-## Local application development
+## Local development
 
-```bash
-python -m pip install -r app/requirements.txt
-python app/app.py
+From the repository root:
+
+```powershell
+python -m pip install -r .\app\requirements.txt
+python .\app\app.py
 ```
 
-Visit `http://localhost:5000/`; the health check is at `/health`.
+Visit `http://localhost:5000/`. The health endpoint is `http://localhost:5000/health`.
 
-Build and run the container locally:
+To build and run the container locally:
 
-```bash
+```powershell
 docker build -t ai-automation-web .
 docker run --rm -p 5000:5000 ai-automation-web
 ```
 
 ## Tear down
 
-Delete the Kubernetes `LoadBalancer` service before destroying the cluster, to let AWS clean up its load balancer:
+Delete the Kubernetes LoadBalancer service first so AWS can clean up its load balancer:
 
-```bash
+```powershell
 kubectl delete service ai-automation-web --namespace portfolio
 ```
 
-Then, from `terraform/`, run:
+Then, from `terraform/`, review and destroy the Terraform-managed infrastructure:
 
 ```powershell
+terraform plan -destroy
 terraform destroy
 ```
 
-The S3 bucket intentionally has versioning enabled. If it contains build metadata, Terraform may report that the bucket is not empty during destroy. Review and remove its objects and versions deliberately, then retry. Do not delete the bucket or Terraform state without confirming you no longer need its contents.
+The S3 bucket has versioning enabled. If it contains build metadata, Terraform may refuse to delete it until all object versions are deliberately removed. Review its contents before cleanup; do not delete Terraform state unless you no longer need it.
 
 ## Repository layout
 
 ```text
-app/                 Flask application
-k8s/                 Namespace, deployment, and service manifests
-terraform/           AWS infrastructure
+app/                 Flask application and HTML template
+k8s/                 Namespace, deployment, and HTTP service manifests
+terraform/           AWS infrastructure and local Terraform configuration
 Dockerfile           Container image definition
-Jenkinsfile          Build, push, deploy, and archive pipeline
+Jenkinsfile          Build, push, deploy, health-check, and archive pipeline
 ```

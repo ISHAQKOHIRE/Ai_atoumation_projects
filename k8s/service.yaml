@@ -5,10 +5,6 @@ metadata:
   namespace: portfolio
   labels:
     app.kubernetes.io/name: ai-automation-web
-  annotations:
-    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "http"
-    service.beta.kubernetes.io/aws-load-balancer-ssl-cert: ACM_CERTIFICATE_ARN_PLACEHOLDER
-    service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "443"
 spec:
   type: LoadBalancer
   selector:
@@ -16,9 +12,5 @@ spec:
   ports:
     - name: http
       port: 80
-      targetPort: http
-      protocol: TCP
-    - name: https
-      port: 443
       targetPort: http
       protocol: TCP

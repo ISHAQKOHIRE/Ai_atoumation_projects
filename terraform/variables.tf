@@ -15,12 +15,6 @@ variable "project_name" {
   }
 }
 
-variable "domain_name" {
-  description = "Root domain hosted in the public Route 53 zone used for the portfolio application."
-  type        = string
-  default     = "ishaqkohire.site"
-}
-
 variable "key_name" {
   description = "Name of an existing EC2 key pair in aws_region, used for Jenkins SSH access."
   type        = string

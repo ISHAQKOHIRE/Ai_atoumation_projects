@@ -4,3 +4,5 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .env
+terraform/console-output.json
+terraform/jenkins-console-log.txt

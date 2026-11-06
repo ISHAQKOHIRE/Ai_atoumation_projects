@@ -15,44 +15,6 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
-data "aws_route53_zone" "portfolio" {
-  name         = "${var.domain_name}."
-  private_zone = false
-}
-
-resource "aws_acm_certificate" "portfolio" {
-  domain_name               = var.domain_name
-  subject_alternative_names = ["www.${var.domain_name}"]
-  validation_method         = "DNS"
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-resource "aws_route53_record" "certificate_validation" {
-  for_each = {
-    for option in aws_acm_certificate.portfolio.domain_validation_options :
-    option.domain_name => {
-      name   = option.resource_record_name
-      record = option.resource_record_value
-      type   = option.resource_record_type
-    }
-  }
-
-  allow_overwrite = true
-  name            = each.value.name
-  records         = [each.value.record]
-  ttl             = 60
-  type            = each.value.type
-  zone_id         = data.aws_route53_zone.portfolio.zone_id
-}
-
-resource "aws_acm_certificate_validation" "portfolio" {
-  certificate_arn         = aws_acm_certificate.portfolio.arn
-  validation_record_fqdns = [for record in aws_route53_record.certificate_validation : record.fqdn]
-}
-
 data "aws_ami" "ubuntu" {
   most_recent = true
   owners      = ["099720109477"]
@@ -342,18 +304,6 @@ resource "aws_iam_role_policy" "jenkins_pipeline" {
         Effect   = "Allow"
         Action   = ["eks:DescribeCluster"]
         Resource = aws_eks_cluster.main.arn
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["elasticloadbalancing:DescribeLoadBalancers"]
-        Resource = "*"
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "route53:ChangeResourceRecordSets"
-        ]
-        Resource = "arn:aws:route53:::hostedzone/${data.aws_route53_zone.portfolio.zone_id}"
       },
       {
         Effect   = "Allow"

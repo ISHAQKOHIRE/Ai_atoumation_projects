@@ -33,17 +33,7 @@ output "aws_region" {
   value       = var.aws_region
 }
 
-output "domain_name" {
-  description = "Portfolio domain configured for Route 53."
-  value       = var.domain_name
-}
-
-output "route53_zone_id" {
-  description = "Public Route 53 hosted zone ID for the portfolio domain."
-  value       = data.aws_route53_zone.portfolio.zone_id
-}
-
-output "acm_certificate_arn" {
-  description = "Validated ACM certificate ARN for the root and www domains."
-  value       = aws_acm_certificate_validation.portfolio.certificate_arn
+output "jenkins_ssh_command" {
+  description = "SSH command template for accessing the Jenkins EC2 instance."
+  value       = "ssh -i <path-to-private-key> ubuntu@${aws_eip.jenkins.public_ip}"
 }
